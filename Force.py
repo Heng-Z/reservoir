@@ -26,8 +26,14 @@ class Reservoir():
         else:
             self.N = N
             self.M = sprandn(self.N,self.N,p) *g *1.0/np.sqrt(p*N)
+        #connections
         self.Jz = None
         self.Jgi = None
+        #states
+        self.x = np.random.rand(self.N,1)
+        self.r = np.random.rand(self.N,1)
+
+
 
     def get_Jz(self,Nout,pz,g,overlap = None):
         self.Nout = Nout
@@ -64,8 +70,8 @@ class Reservoir():
         #array to record output trajectories during training and testing
         train_out = np.zeros((Dout,L))
         test_out = np.zeros((Dout,L))
-        x = np.random.rand(self.N,1)
-        r = np.random.rand(self.N,1)
+        x = self.x
+        r = self.r
         Pz = repmat((1.0/aplha)*np.eye(self.N),self.Nout)
         P = repmat((1.0/aplha)*np.eye(self.N),self.Nout,n2 = self.neuro_per_read)
         #_________________training__________________
@@ -122,6 +128,20 @@ class Reservoir():
             test_out[:,i] = z
         
         return train_out,test_out
+
+    def free_run(self,dt,simulation_time):
+        x = self.x
+        r = self.r
+        tspan = np.array(np.arange(0,simulation_time,dt))
+        states_T = np.zeros((self.N,len(tspan)))
+        for i,t in enumerate(tspan):
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) 
+            r = np.tanh(x) #(N,1)
+            states_T[:,i] = x[:,0]       
+        return states_T
+
+    
+            
 
 if __name__ == "__main__":
     time_sec = 10
