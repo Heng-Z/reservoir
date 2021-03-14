@@ -60,7 +60,7 @@ class Reservoir():
             self.add_input(output_series.shape[0],0,0)
         assert input_series.shape[1] == output_series.shape[1]
         L = input_series.shape[1]
-        Dout = output_series.shape[1]
+        Dout = output_series.shape[0]
         #array to record output trajectories during training and testing
         train_out = np.zeros((Dout,L))
         test_out = np.zeros((Dout,L))
@@ -115,7 +115,7 @@ class Reservoir():
         L = test_input.shape[1]
 
         for i in range(L):
-            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt)
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
             r = np.tanh(x) #(N,1)
             z = np.dot(self.Jz.T,r) # (Nout,1)
 
@@ -124,10 +124,10 @@ class Reservoir():
         return train_out,test_out
 
 if __name__ == "__main__":
-    time_sec = 100 
+    time_sec = 10
     dt = 0.1
-    simtime = np.arange(0,time_sec,step=dt)
-    simtime2 = np.arange(time_sec,2*time_sec,step=dt)
+    simtime = np.arange(0,time_sec,step=dt).reshape(1,-1)
+    simtime2 = np.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
     amp = 1.3
     freq = 1/60
     ft = (amp/1.0)*np.sin(1.0*np.pi*freq*simtime) + \
@@ -140,15 +140,15 @@ if __name__ == "__main__":
         (amp/6.0)*np.sin(3.0*np.pi*freq*simtime2) +  \
         (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)
     ft2 = ft2.reshape(1,-1)
-    nn = Reservoir(N=1000,p=0.3,g=1.5)
-    nn.get_Jz(1,0.3,1)
+    nn = Reservoir(N=100,p=0.5,g=1.5)
+    nn.get_Jz(1,0.4,1)
     [train_out,test_out] = nn.train(None,ft,dt,1,2)
-    plt.figure
+    plt.figure()
     plt.subplot(2,1,1)
     plt.plot(simtime,ft,'b')
     plt.subplot(2,1,2)
     plt.plot(simtime,train_out,'r')
-    plt.figure
+    plt.figure()
     plt.subplot(2,1,1)
     plt.plot(simtime,ft2,'b')
     plt.subplot(2,1,2)
