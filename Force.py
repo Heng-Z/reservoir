@@ -144,7 +144,7 @@ class Reservoir():
             
 
 if __name__ == "__main__":
-    time_sec = 10
+    time_sec = 100
     dt = 0.1
     simtime = np.arange(0,time_sec,step=dt).reshape(1,-1)
     simtime2 = np.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
@@ -160,19 +160,19 @@ if __name__ == "__main__":
         (amp/6.0)*np.sin(3.0*np.pi*freq*simtime2) +  \
         (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)
     ft2 = ft2.reshape(1,-1)
-    nn = Reservoir(N=100,p=0.5,g=1.5)
-    nn.get_Jz(1,0.4,1)
+    nn = Reservoir(N=300,p=0.3,g=2)
+    nn.get_Jz(1,0.3,1)
     [train_out,test_out] = nn.train(None,ft,dt,1,2)
     plt.figure()
     plt.subplot(2,1,1)
-    plt.plot(simtime,ft,'b')
+    plt.plot(simtime.T,ft.T,'b')
     plt.subplot(2,1,2)
-    plt.plot(simtime,train_out,'r')
+    plt.plot(simtime.T,train_out.T,'r')
     plt.figure()
     plt.subplot(2,1,1)
-    plt.plot(simtime,ft2,'b')
+    plt.plot(simtime.T,ft2.T,'b')
     plt.subplot(2,1,2)
-    plt.plot(simtime,test_out,'g')
+    plt.plot(simtime.T,test_out.T,'g')
     plt.show()
     
 
