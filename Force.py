@@ -1,6 +1,7 @@
 import numpy as np
 from numpy import matlib
 import matplotlib.pyplot as plt
+import time
 def sprandn(N1,N2,p):
     # import sparse 
     import scipy.sparse as sparse
@@ -154,7 +155,7 @@ class Reservoir():
             flts.append(flt)
             P_all[:,:,i] = np.dot(P_all[:,:,i],flt)
         for i in range(L):
-            print(i)
+            # print(i)
             t = dt * i
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
             x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz ,z *dt)
@@ -201,7 +202,8 @@ class Reservoir():
         return states_T
 
 if __name__ == "__main__":
-    time_sec = 50
+    start = time.time()
+    time_sec = 1440
     dt = 0.1
     nt = 2
     alpha = 1.0
@@ -226,6 +228,8 @@ if __name__ == "__main__":
     nn = Reservoir(N=1000,p=0.5,g=1.5)
     nn.get_Jz(2,0.2,fb=1.0) #(Nout,pz,g,fb=1)
     [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt,fb=1.0) #(input_series,output_series,dt,aplha,nt,test_input=None)
+    end = time.time()
+    print('***time consume:****',start-end)
     plt.figure()
     plt.subplot(3,1,1)
     plt.plot(simtime.T,ft.T,'b',simtime.T,train_out.T,'r')
