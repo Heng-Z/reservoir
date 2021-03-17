@@ -35,7 +35,7 @@ class Reservoir():
 
 
 
-    def get_Jz(self,Nout,pz,g,overlap = None):
+    def get_Jz(self,Nout,pz,fb=1,overlap = None):
         self.Nout = Nout
 
         num = int(self.N*pz*Nout) - np.mod(int(self.N*pz*Nout),Nout)
@@ -46,10 +46,10 @@ class Reservoir():
             for i in sample_nuerons[j*neuro_per_read:(j+1)*neuro_per_read]:
                 gz[i,j] = 1
 
-        randn = g*np.random.normal(size =(self.N,Nout))
         self.read_connectivity = gz
         # self.Jz = np.multiply(randn,gz) #(N,Nout)
         self.Jz = np.zeros((self.N,self.Nout))
+        self.Jgz = np.multiply(fb*(np.random.rand(self.N,Nout) - 0.5),gz)
         self.read_neurons = sample_nuerons.reshape(Nout,neuro_per_read)
         self.neuro_per_read = neuro_per_read
 
@@ -137,61 +137,57 @@ class Reservoir():
             self.add_input(output_series.shape[0],0,0)
         assert input_series.shape[1] == output_series.shape[1]
         L = input_series.shape[1]
-        # Dout = output_series.shape[0]
+        Nout = output_series.shape[0]
         #array to record output trajectories during training and testing
-        train_out = np.zeros((1,L))
-        test_out = np.zeros((1,L))
-        weight_train =np.zeros((1,L))
+        train_out = np.zeros((Nout,L))
+        test_out = np.zeros((Nout,L))
+        weight_train =np.zeros((Nout,L))
         x = self.x
         r = self.r
-        z = np.random.randn(1)
-        P = np.eye(self.N)
-        self.Jgz = fb*(np.random.rand(self.N,1) -0.5)
-        
-        w_i = self.Jz #(N,1)
-        synapse_ind = np.where(self.read_connectivity[:,0] !=0)
-        flt = np.zeros((self.N,self.N))
-        flt[synapse_ind,synapse_ind] = 1
-        P = np.dot(P,flt)
+        z = np.random.randn(Nout,1)
+        P_all = repmat(np.eye(self.N),Nout)
+        flts = []
+        for i in range(Nout):
+            synapse_ind = np.where(self.read_connectivity[:,i] !=0)
+            flt = np.zeros((self.N,self.N))
+            flt[synapse_ind,synapse_ind] = 1
+            flts.append(flt)
+            P_all[:,:,i] = np.dot(P_all[:,:,i],flt)
         for i in range(L):
             print(i)
             t = dt * i
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
-            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + self.Jgz * z *dt
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz ,z *dt)
             r = np.tanh(x) #(N,1)
             z = np.dot(self.Jz.T,r) # (Nout,1)
 
             if np.mod(i,nt) == 0:
-                r_p = np.dot(flt,r)
-                k = np.dot(P,r_p) #(N,1)
-                rPr = np.dot(r_p.T,k) # scalar
-                c = 1.0/(1.0 + rPr) # scalar
-                P = P - np.dot(k,(k.T*c))
-                e = z - output_series[0,i]
+                for readi in range(Nout):
+                    P = P_all[:,:,readi]
+                    r_p = np.dot(flts[readi],r)
+                    k = np.dot(P,r_p) #(N,1)
+                    rPr = np.dot(r_p.T,k) # scalar
+                    c = 1.0/(1.0 + rPr) # scalar
+                    P_all[:,:,readi] = P - np.dot(k,(k.T*c))
+                    e = z[readi] - output_series[readi,i]
 
-                dw = -e*k*c
-                self.Jz += dw.reshape(-1,1)
-            train_out[0,i] = z
-            weight_train[0,i] = np.sqrt(np.dot(self.Jz.T,self.Jz))
+                    dw = -e*k*c
+                    self.Jz[:,readi] += dw.reshape(-1,)
+            train_out[:,i] = z.reshape(-1,)
+            weight_train[:,i] = np.diag(np.sqrt(np.dot(self.Jz.T,self.Jz)))
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
 
         for i in range(L):
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
-            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + self.Jgz * z *dt
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz, z *dt)
             r = np.tanh(x) #(N,1)
             z = np.dot(self.Jz.T,r) # (Nout,1)
 
-            test_out[0,i] = z
+            test_out[:,i] = z.reshape(-1,)
         
         return train_out,test_out,weight_train
-
-            
-
-
-
-
 
     def free_run(self,dt,simulation_time):
         x = self.x
@@ -204,11 +200,8 @@ class Reservoir():
             states_T[:,i] = x[:,0]       
         return states_T
 
-    
-            
-
 if __name__ == "__main__":
-    time_sec = 1440
+    time_sec = 50
     dt = 0.1
     nt = 2
     alpha = 1.0
@@ -216,18 +209,22 @@ if __name__ == "__main__":
     simtime2 = np.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
     amp = 1.3
     freq = 1/60
-    ft = (amp/1.0)*np.sin(1.0*np.pi*freq*simtime) + \
+    ft = np.zeros((2,simtime.shape[1]))
+    ft2 = np.zeros((2,simtime2.shape[1]))
+    ft[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime) + \
         (amp/2.0)*np.sin(2.0*np.pi*freq*simtime) +  \
         (amp/6.0)*np.sin(3.0*np.pi*freq*simtime) +  \
-        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime)
-    ft = ft.reshape(1,-1)
-    ft2 = (amp/1.0)*np.sin(1.0*np.pi*freq*simtime2) + \
+        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime)).reshape(-1,)
+
+    ft[1,:] = (np.sin(2.0*np.pi*freq*simtime)).reshape(-1,)
+
+    ft2[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime2) + \
         (amp/2.0)*np.sin(2.0*np.pi*freq*simtime2) +  \
         (amp/6.0)*np.sin(3.0*np.pi*freq*simtime2) +  \
-        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)
-    ft2 = ft2.reshape(1,-1)
+        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)).reshape(-1,)
+    ft2[1,:] = (np.sin(2.0*np.pi*freq*simtime2)).reshape(-1,)
     nn = Reservoir(N=1000,p=0.5,g=1.5)
-    nn.get_Jz(1,1,1) #(Nout,pz,g)
+    nn.get_Jz(2,0.2,fb=1.0) #(Nout,pz,g,fb=1)
     [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt,fb=1.0) #(input_series,output_series,dt,aplha,nt,test_input=None)
     plt.figure()
     plt.subplot(3,1,1)
