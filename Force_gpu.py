@@ -9,7 +9,7 @@ def sprandn(N1,N2,p):
     import scipy.stats as stats
     rvs = stats.norm(loc=0, scale=1).rvs
     S = sparse.random(N1, N2, density=p, data_rvs=rvs)
-    return S.toarray()
+    return cp.asarray(S.toarray())
 
 def repmat(M,n1,n2=None):
     #copy M (m1,m2) to form multi-dim array of (m1,m2,n1,n2)
@@ -40,7 +40,7 @@ class Reservoir():
         self.Nout = Nout
 
         num = int(self.N*pz*Nout) - cp.mod(int(self.N*pz*Nout),Nout)
-        sample_nuerons = cp.random.choice(cp.arange(self.N),num,replace=False)
+        sample_nuerons = cp.random.choice(cp.arange(self.N),int(num),replace=False)
         neuro_per_read = int(self.N*pz*Nout)//Nout
         gz = cp.zeros((self.N,Nout))
         for j in range(Nout):
@@ -152,16 +152,17 @@ class Reservoir():
         w_i = self.Jz #(N,1)
         synapse_ind = cp.where(self.read_connectivity[:,0] !=0)
         flt = cp.zeros((self.N,self.N))
-        flt[synapse_ind,synapse_ind] = 1
+        flt[synapse_ind[0],synapse_ind[0]] = 1
         P = cp.dot(P,flt)
         for i in range(L):
-            print(i)
+            # print(i)
             t = dt * i
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
             x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + self.Jgz * z *dt
             r = cp.tanh(x) #(N,1)
+            # print('r:',r.shape)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
-
+            # print('z:',z.shape)
             if cp.mod(i,nt) == 0:
                 r_p = cp.dot(flt,r)
                 k = cp.dot(P,r_p) #(N,1)
@@ -172,8 +173,8 @@ class Reservoir():
 
                 dw = -e*k*c
                 self.Jz += dw.reshape(-1,1)
-            train_out[0,i] = z
-            weight_train[0,i] = cp.sqrt(cp.dot(self.Jz.T,self.Jz))
+            train_out[0,i] = z[0,0]
+            weight_train[0,i] = cp.sqrt(cp.dot(self.Jz.T,self.Jz))[0,0]
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
@@ -184,7 +185,7 @@ class Reservoir():
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
 
-            test_out[0,i] = z
+            test_out[0,i] = z[0,0]
         
         return train_out,test_out,weight_train
 
@@ -209,6 +210,8 @@ class Reservoir():
             
 
 if __name__ == "__main__":
+    import time
+    start = time.time()
     time_sec = 1440
     dt = 0.1
     nt = 2
@@ -230,6 +233,15 @@ if __name__ == "__main__":
     nn = Reservoir(N=1000,p=0.5,g=1.5)
     nn.get_Jz(1,0.2,1) #(Nout,pz,g)
     [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt,fb=1.0) #(input_series,output_series,dt,aplha,nt,test_input=None)
+    train_out = cp.asnumpy(train_out)
+    test_out = cp.asnumpy(test_out)
+    weight_train = cp.asnumpy(weight_train)
+    ft = cp.asnumpy(ft)
+    ft2 = cp.asnumpy(ft2)
+    simtime = cp.asnumpy(simtime)
+    simtime2 = cp.asnumpy(simtime2)
+    end = time.time()
+    print('***time consume:****',start-end)
     plt.figure()
     plt.subplot(3,1,1)
     plt.plot(simtime.T,ft.T,'b',simtime.T,train_out.T,'r')
