@@ -1,0 +1,1 @@
+cp.where(${1D array}) return tuple (array(...),)
