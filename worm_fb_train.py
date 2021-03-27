@@ -12,7 +12,7 @@ ct = datetime.datetime.now().strftime("%H_%M_%S")
 time_sec = 1440
 dt = 0.1
 nt = 2
-N = 5000
+N = 1000
 while True:
     alpha = 2* float(cp.random.rand(1))
     fb = 1.5 + float(cp.random.rand(1))
@@ -22,6 +22,8 @@ while True:
     plot_range = 2000
     nn = Reservoir(N=N,p=Pgg,g=g)
     nn.get_Jz(7,Pz,fb=fb) #(Nout,pz,fb=1)
+    # nn.change_time_coef()
+    # nn.discount = 0.1
     # simtime = cp.arange(0,time_sec,step=dt).reshape(1,-1)
     # simtime2 = cp.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
     inputs = cp.asarray(signals['roam_real_ica'])
@@ -59,7 +61,7 @@ while True:
     plt.plot(range(3*plot_range),weight_train[:,0:3*plot_range].T)
     plt.title('weight')
     plt.figtext(0.6, 0.01, "g={} , fb={} , Pz={} , Pgg={} \n alpha={}, N={}".format(g,fb,Pz,Pgg,alpha,N), ha="center", fontsize=12, bbox={"facecolor":"orange", "alpha":0.6, "pad":6})
-    ct = datetime.datetime.now().strftime("%B_%D_%H_%M_%S")
+    ct = datetime.datetime.now().strftime("%b_%d_%H_%M_%S")
     filename = './image/intn_worm_' + ct +'.jpeg'
     plt.savefig(filename,dpi=300)
 # np.save('net_params_'+ ct +'.npz',nn.Jz,nn.Jgz,nn.M)

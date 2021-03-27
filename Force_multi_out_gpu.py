@@ -21,16 +21,17 @@ def repmat(M,n1,n2=None):
         N = cp.repeat(N[cp.newaxis,:,:,:],n2,axis = 0)
     return N
 
-def update_weight(P_all,flts,r,z,Jz,target):
+def update_weight(P_all,flts,r,z,Jz,target,delta=0):
     for readi in range(P_all.shape[0]):
         P = P_all[readi]
         r_p = cp.dot(flts[readi],r)
         k = cp.dot(P,r_p) #(N,1)
         rPr = cp.dot(r_p.T,k) # scalar
-        c = 1.0/(1.0 + rPr) # scalar
-        P_all[readi] = P - cp.dot(k,(k.T*c))
+        c = 1.0/(1.0 + (1+delta)/(1-delta)*rPr) # scalar
+        P_all[readi] = P/(1-delta) - (1+delta)/(1-delta)**2* cp.dot(k,(k.T*c))
+        # P_all[readi] = P - cp.dot(k,(k.T*c))
         e = z[readi] - target[readi]
-        dw = -e*k*c
+        dw = -e*k*c *(1+delta)/(1-delta)
         Jz[:,readi] += dw.reshape(-1,)
     return P_all,Jz
     
@@ -60,13 +61,14 @@ def update_readout_synp(P_all,flts,r,z,Jz,M,target):
 
             dw = -e_z * ki * c
             self.M[neuroni,:] += dw.reshape(-1,)
-def update_one(P,flt,r,e,J):
+def update_one(P,flt,r,e,J,delta=0):
+    #add discount factor delta to perform weighted RLS
     r_p = cp.multiply(flt.reshape(-1,1),r)
     k = cp.dot(P,r_p) #(N,1)
     rPr = cp.dot(r_p.T,k) # scalar
-    c = 1.0/(1.0 + rPr) # scalar
-    P = P - cp.dot(k,(k.T*c))
-    dw = -e*k*c
+    c = 1.0/(1.0 + (1+delta)/(1-delta)*rPr) # scalar
+    P = P/(1-delta) - (1+delta)/(1-delta)**2 * cp.dot(k,(k.T*c))
+    dw = -e*k*c*(1+delta)/(1-delta)
     J += dw.reshape(-1,)
     return P,J
 
@@ -86,8 +88,12 @@ class Reservoir():
         #states
         self.x = cp.random.rand(self.N,1)
         self.r = cp.random.rand(self.N,1)
+        self.time_coef = cp.random.randn(N,1)/5 +1
+        self.discount = 0
 
-
+    def change_time_coef(self):
+        self.time_coef[0:self.N//3] = cp.random.randn(self.N//3,1)*2 + 10
+        self.time_coef[self.N//3:self.N//3*2] =  10*cp.random.randn(self.N//3,1) + 100
 
     def get_Jz(self,Nout,pz,fb=1,overlap = False):
         self.Nout = Nout
@@ -209,12 +215,18 @@ class Reservoir():
             # print(i)
             t = dt * i
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z*dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
+
+            #coef * (x'-x)/dt = -x + Mx --> x' = x+dt/coef *(-x+MX)
+            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z*dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
+            
+            #when consider different time scale neurons:
+            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise[:,i].reshape(-1,1) + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)))*dt/self.time_coef
+
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
             if cp.mod(i,nt) == 0:
             #____________UPDATE PARAMETERS_________
-                [P_all, self.Jz] = update_weight(P_all,flts,r,z,self.Jz,output_series[:,i])
+                [P_all, self.Jz] = update_weight(P_all,flts,r,z,self.Jz,output_series[:,i],delta=self.discount)
             train_out[:,i] = z.reshape(-1,)
             weight_train[:,i] = cp.diag(cp.sqrt(cp.dot(self.Jz.T,self.Jz)))
         if test_input is None:
@@ -224,7 +236,10 @@ class Reservoir():
         # print(flts[1])
         for i in range(L):
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
+            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
+
+            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise[:,i].reshape(-1,1) + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)))*dt/self.time_coef
+
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
 
