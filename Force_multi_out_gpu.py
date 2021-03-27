@@ -16,10 +16,59 @@ def sprandn(N1,N2,p):
 
 def repmat(M,n1,n2=None):
     #copy M (m1,m2) to form multi-dim array of (m1,m2,n1,n2)
-    N = cp.repeat(M[:,:,cp.newaxis], n1, axis=2)
+    N = cp.repeat(M[cp.newaxis,:,:], n1, axis=0)
     if n2 is not None:
-        N = cp.repeat(N[:,:,:,cp.newaxis],n2,axis = 3)
+        N = cp.repeat(N[cp.newaxis,:,:,:],n2,axis = 0)
     return N
+
+def update_weight(P_all,flts,r,z,Jz,target):
+    for readi in range(P_all.shape[0]):
+        P = P_all[readi]
+        r_p = cp.dot(flts[readi],r)
+        k = cp.dot(P,r_p) #(N,1)
+        rPr = cp.dot(r_p.T,k) # scalar
+        c = 1.0/(1.0 + rPr) # scalar
+        P_all[readi] = P - cp.dot(k,(k.T*c))
+        e = z[readi] - target[readi]
+        dw = -e*k*c
+        Jz[:,readi] += dw.reshape(-1,)
+    return P_all,Jz
+    
+def update_readout_synp(P_all,flts,r,z,Jz,M,target):
+    for readi in range(self.Nout):
+        P = P_all[readi]
+        r_p = cp.dot(flts[readi],r)
+        k = cp.dot(P,r_p) #(N,1)
+        rPr = cp.dot(r_p.T,k) # scalar
+        c = 1.0/(1.0 + rPr) # scalar
+        P_all[readi] = P - cp.dot(k,(k.T*c))
+        e = z[readi] - target[readi]
+        dw = -e*k*c
+        Jz[:,readi] += dw.reshape(-1,)
+        
+        neurons_read_i = self.read_neurons[readi,:]
+        for idx,neuroni in enumerate(neurons_read_i):
+            w_ni = self.M[neuroni,:].reshape(1,-1) # (1,N)
+            synapse_ind = cp.where(w_ni!=0)[1]  # find neurons pre-synaptic to neuron i 
+            flt = cp.zeros((self.N,self.N))
+            flt[synapse_ind,synapse_ind] = 1
+            Pi = P[:,:,readi,idx] #(N,N) the actual dim of Pi is num of pre-synapse
+            ki = cp.dot(Pi,cp.dot(flt,r)) 
+            rPr = cp.dot(r.T,ki)
+            c = 1.0/(1.0 + rPr)
+            Pz[:,:,readi] = cp.dot(Pi,flt) -cp.dot(ki,(ki.T * c))
+
+            dw = -e_z * ki * c
+            self.M[neuroni,:] += dw.reshape(-1,)
+def update_one(P,flt,r,e,J):
+    r_p = cp.multiply(flt.reshape(-1,1),r)
+    k = cp.dot(P,r_p) #(N,1)
+    rPr = cp.dot(r_p.T,k) # scalar
+    c = 1.0/(1.0 + rPr) # scalar
+    P = P - cp.dot(k,(k.T*c))
+    dw = -e*k*c
+    J += dw.reshape(-1,)
+    return P,J
 
 class Reservoir():
     def __init__(self,M=None,N=1000,p=0.1,g=1.6):
@@ -31,6 +80,7 @@ class Reservoir():
             self.N = N
             self.M = sprandn(self.N,self.N,p) *g *1.0/cp.sqrt(p*N)
         #connections
+        self.inter_connectivity = (abs(self.M)>1e-6).astype(np.uint8)
         self.Jz = None
         self.Jgi = None
         #states
@@ -39,12 +89,13 @@ class Reservoir():
 
 
 
-    def get_Jz(self,Nout,pz,fb=1,overlap = None):
+    def get_Jz(self,Nout,pz,fb=1,overlap = False):
         self.Nout = Nout
 
         num = int(self.N*pz*Nout) - cp.mod(int(self.N*pz*Nout),Nout)
-        sample_nuerons = cp.random.choice(cp.arange(self.N),int(num),replace=False)
-        neuro_per_read = int(self.N*pz*Nout)//Nout
+
+        sample_nuerons = cp.random.choice(cp.arange(self.N),int(num),replace=overlap)
+        neuro_per_read = int(self.N*pz)
         gz = cp.zeros((self.N,Nout))
         for j in range(Nout):
             for i in sample_nuerons[j*neuro_per_read:(j+1)*neuro_per_read]:
@@ -53,7 +104,7 @@ class Reservoir():
         self.read_connectivity = gz
         # self.Jz = cp.multiply(randn,gz) #(N,Nout)
         self.Jz = cp.zeros((self.N,self.Nout))
-        self.Jgz = cp.multiply(fb*(cp.random.rand(self.N,Nout) - 0.6),gz)
+        self.Jgz = cp.multiply(fb*(cp.random.rand(self.N,Nout) - 0.5),gz)
         self.read_neurons = sample_nuerons.reshape(Nout,neuro_per_read)
         self.neuro_per_read = neuro_per_read
 
@@ -61,7 +112,7 @@ class Reservoir():
         self.Nin = Nin
         self.Jgi = g*sprandn(self.N,self.Nin,pi)
 
-    def internal_train(self,input_series,output_series,dt,alpha,nt,test_input=None):
+    def internal_train(self,input_series,output_series,dt,alpha,nt,nl =0,test_input=None):
         '''
         input: input time series of ndarray of dim (Nin,T)
             output time series of ndarray of dim (Nout,T)
@@ -76,69 +127,64 @@ class Reservoir():
         #array to record output trajectories during training and testing
         train_out = cp.zeros((Dout,L))
         test_out = cp.zeros((Dout,L))
+        weight_train =cp.zeros((self.Nout,L))
+        noise = cp.random.randn(self.N,L)*nl
         x = self.x
         r = self.r
-        Pz = repmat((1.0/aplha)*cp.eye(self.N),self.Nout)
-        P = repmat((1.0/aplha)*cp.eye(self.N),self.Nout,n2 = self.neuro_per_read)
+        z = cp.random.randn(self.Nout,1)
+        P_z = repmat((1.0/alpha)*cp.eye(self.N),self.Nout)
+        P_syn = repmat((1.0/alpha)*cp.eye(self.N),self.neuro_per_read,n2 = self.Nout)
+        #_________initiate inverse Correlation Matrices and filters_____________
+        for i in range(self.Nout):
+            flt = self.read_connectivity[:,i]
+            P_z[i] = np.multiply(P_z[i],flt*flt.T)
+            for j,idx in enumerate(self.read_neurons[:,i]):
+                flt = self.M[idx,:].T
+                P_syn[i,j] = np.multiply(P_z[i],flt*flt.T)
+
+
         #_________________training__________________
-        for i in range(L):
-            print(i)
+        for i in tqdm(range(L)):
+            # print(i)
             t = dt * i
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
+            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
+            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
+        
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
 
             if cp.mod(i,nt) ==0:
                 for readi in range(self.Nout):
-                    w_readi = self.Jz[:,readi]
-                    synapse_ind = cp.where(w_readi!=0)
-                    flt = cp.zeros((self.N,self.N))
-                    flt[synapse_ind,synapse_ind] = 1
-
-                    Pzi = Pz[:,:,readi]
-                    kzi = cp.dot(Pzi,cp.dot(flt,r)) #(Nout,1)
-                    rPr_z = cp.dot(r.T,kzi) # scalar
-                    c_z = 1.0/(1.0 + rPr_z) # scalar
-                    Pz[:,:,readi] = cp.dot(Pzi,flt) - cp.dot(kzi,(kzi.T*c_z))
                     e_z = z[readi] - output_series[readi,i]
+                    [P_z[readi],self.Jz[:,readi]] = update_one(P_z[readi],self.read_connectivity[:,readi],r,e_z,self.Jz[:,readi])
 
-                    dw = -e_z*kzi*c_z
-                    self.Jz[:,readi] += dw.reshape(-1,)
-                    
                     neurons_read_i = self.read_neurons[readi,:]
                     for idx,neuroni in enumerate(neurons_read_i):
-                        w_ni = self.M[neuroni,:].reshape(1,-1) # (1,N)
-                        synapse_ind = cp.where(w_ni!=0)[1]  # find neurons pre-synaptic to neuron i 
-                        flt = cp.zeros((self.N,self.N))
-                        flt[synapse_ind,synapse_ind] = 1
-                        Pi = P[:,:,readi,idx] #(N,N) the actual dim of Pi is num of pre-synapse
-                        ki = cp.dot(Pi,cp.dot(flt,r)) 
-                        rPr = cp.dot(r.T,ki)
-                        c = 1.0/(1.0 + rPr)
-                        Pz[:,:,readi] = cp.dot(Pi,flt) -cp.dot(ki,(ki.T * c))
-
-                        dw = -e_z * ki * c
-                        self.M[neuroni,:] += dw.reshape(-1,)
+                        [P_syn[readi,neuroni], new_raw] = update_one(P_syn[readi,neuroni],self.inter_connectivity[neuroni,:].T,r,e_z,self.M[neuroni].T)
+                        self.M[neuroni] = new_raw.T
             
-            train_out[:,i] = z
+            train_out[:,i] = z.reshape(-1,)
+            weight_train[:,i] = cp.diag(cp.sqrt(cp.dot(self.Jz.T,self.Jz)))
         #_________________testing_______________
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
 
         for i in range(L):
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
+            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
-
-            test_out[:,i] = z
+            # print(r.shape,x.shape,z.shape)
+            test_out[:,i] = z.reshape(-1,)
         
-        return train_out,test_out
+        return train_out,test_out,weight_train
 
     def fb_train(self,input_series,output_series,dt,alpha,nt,nl =0,test_input=None):
         if input_series is None:
             input_series = cp.zeros(output_series.shape)
             self.add_input(output_series.shape[0],0,0)
+        if test_input is None:
+            test_input = input_series
         assert input_series.shape[1] == output_series.shape[1]
         L = input_series.shape[1]
         Nout = output_series.shape[0]
@@ -151,42 +197,34 @@ class Reservoir():
         z = cp.random.randn(Nout,1)
         P_all = repmat(cp.eye(self.N)/alpha,Nout)
         flts = []
+        noise = cp.random.randn(self.N,L)*nl
+        noise2 = cp.random.randn(self.N,L)*nl
         for i in range(Nout):
             synapse_ind = cp.where(self.read_connectivity[:,i] !=0)
             flt = cp.zeros((self.N,self.N))
             flt[synapse_ind[0],synapse_ind[0]] = 1
             flts.append(flt)
-            P_all[:,:,i] = cp.dot(P_all[:,:,i],flt)
+            P_all[i] = cp.dot(P_all[i],flt)
         for i in tqdm(range(L)):
             # print(i)
             t = dt * i
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z *dt) + cp.random.randn(x.shape[0],1)*nl *dt
+            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z*dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
-
             if cp.mod(i,nt) == 0:
-                for readi in range(Nout):
-                    P = P_all[:,:,readi]
-                    r_p = cp.dot(flts[readi],r)
-                    k = cp.dot(P,r_p) #(N,1)
-                    rPr = cp.dot(r_p.T,k) # scalar
-                    c = 1.0/(1.0 + rPr) # scalar
-                    P_all[:,:,readi] = P - cp.dot(k,(k.T*c))
-                    e = z[readi] - output_series[readi,i]
-
-                    dw = -e*k*c
-                    self.Jz[:,readi] += dw.reshape(-1,)
+            #____________UPDATE PARAMETERS_________
+                [P_all, self.Jz] = update_weight(P_all,flts,r,z,self.Jz,output_series[:,i])
             train_out[:,i] = z.reshape(-1,)
             weight_train[:,i] = cp.diag(cp.sqrt(cp.dot(self.Jz.T,self.Jz)))
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
-        print(P)
-        print(flts[1])
+        # print(P)
+        # print(flts[1])
         for i in range(L):
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + cp.random.randn(x.shape[0],1)*nl *dt
+            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
 
@@ -234,22 +272,25 @@ def norm_weight(signals,weights):
 if __name__ == "__main__":
     start = time.time()
     ct = datetime.datetime.now().strftime("%H_%M_%S")
-    time_sec = 1440
+    time_sec = 500
     dt = 0.1
-    nt = 2
-    N = 1000
+    nt = 3
+    N = 500
     for i in range(50):
-        alpha = float(cp.random.rand(1))
-        fb =1+float(cp.random.rand(1))
+        # alpha = 1+float(cp.random.rand(1))
+        alpha = 0.6
+        # fb =1.5+float(cp.random.rand(1))
+        fb = 2.2
         g = 1.6
-        Pz = 0.25
-        Pgg = float(cp.random.rand(1))*0.75
+        Pz = 0.11
+        # Pgg = float(cp.random.rand(1))*0.75
+        Pgg = 0.01
         nn = Reservoir(N=N,p=Pgg,g=g)
         nn.get_Jz(4,Pz,fb=fb) #(Nout,pz,fb=1)
         simtime = cp.arange(0,time_sec,step=dt).reshape(1,-1)
         simtime2 = cp.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
         amp = 1.3
-        freq = 1/60
+        freq = 1/20
         ft = cp.zeros((4,simtime.shape[1]))
         ft2 = cp.zeros((4,simtime2.shape[1]))
         ft[0,:] = ((amp/1.0)*cp.sin(1.0*cp.pi*freq*simtime) + \
@@ -259,16 +300,20 @@ if __name__ == "__main__":
 
         ft[1,:] = (cp.sin(2.0*cp.pi*freq*simtime)).reshape(-1,)
         ft[2,:] = (cp.sin(2.0*cp.pi*freq*simtime+cp.pi/2)).reshape(-1,)
-        ft[3,:] = triangle_wave(simtime).reshape(-1,)
+        # ft[3,:] = triangle_wave(simtime).reshape(-1,)
+        ft[3,:] = (cp.sin(4.0*cp.pi*freq*simtime+cp.pi/2)).reshape(-1,)
         ft2[0,:] = ((amp/1.0)*cp.sin(1.0*cp.pi*freq*simtime2) + \
             (amp/2.0)*cp.sin(2.0*cp.pi*freq*simtime2) +  \
             (amp/6.0)*cp.sin(3.0*cp.pi*freq*simtime2) +  \
             (amp/3.0)*cp.sin(4.0*cp.pi*freq*simtime2)).reshape(-1,)
         ft2[1,:] = (cp.sin(2.0*cp.pi*freq*simtime2)).reshape(-1,)
         ft2[2,:] = (cp.sin(2.0*cp.pi*freq*simtime2+cp.pi/2)).reshape(-1,)
-        ft2[3,:] = triangle_wave(simtime2).reshape(-1,)
+        # ft2[3,:] = triangle_wave(simtime2).reshape(-1,)
+        ft2[3,:] = (cp.sin(4.0*cp.pi*freq*simtime2+cp.pi/2)).reshape(-1,)
         #______________train_______________
-        [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt) #(input_series,output_series,dt,aplha,nt,test_input=None)
+        [train_out,test_out,weight_train] = nn.internal_train(None,ft,dt,alpha,nt) 
+        # [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt)
+        #(input_series,output_series,dt,alpha,nt,test_input=None)  (input_series,output_series,dt,alpha,nt,nl =0,test_input=None)
         #__transfer results format
         train_out = cp.asnumpy(train_out)
         test_out = cp.asnumpy(test_out)
@@ -298,9 +343,9 @@ if __name__ == "__main__":
         plt.subplot(6,1,6)
         plt.plot(simtime.T,weight_train.T)
         plt.title('weight')
-        plt.figtext(0.6, 0.01, "g={} , fb={} , Pz={} , Pgg={} \n aplha={}, N={}".format(g,fb,Pz,Pgg,alpha,N), ha="center", fontsize=12, bbox={"facecolor":"orange", "alpha":0.6, "pad":6})
+        plt.figtext(0.6, 0.01, "g={} , fb={} , Pz={} , Pgg={} \n alpha={}, N={}".format(g,fb,Pz,Pgg,alpha,N), ha="center", fontsize=12, bbox={"facecolor":"orange", "alpha":0.6, "pad":6})
         ct = datetime.datetime.now().strftime("%H_%M_%S")
-        filename = './image/multiple_output_' + ct +'.jpeg'
+        filename = './image/fb_output_' + ct +'.jpeg'
         plt.savefig(filename,dpi=300)
     # plt.show()
 

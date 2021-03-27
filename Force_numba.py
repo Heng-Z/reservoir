@@ -1,36 +1,27 @@
 import numpy as np
 from numpy import matlib
 import matplotlib.pyplot as plt
-# import cupy as cp
-
 import time
-import datetime
-from tqdm import tqdm
-def sprandn(N1,N2,p):
-    # import sparse 
-    import scipy.sparse as sparse
-    # import stats
-    import scipy.stats as stats
-    rvs = stats.norm(loc=0, scale=1).rvs
-    S = sparse.random(N1, N2, density=p, data_rvs=rvs)
-    return np.asarray(S.toarray())
+from numba import int32, float32    # import the types
+from numba.experimental import jitclass
 
-def repmat(M,n1,n2=None):
-    #copy M (m1,m2) to form multi-dim array of (m1,m2,n1,n2)
-    N = np.repeat(M[:,:,np.newaxis], n1, axis=2)
-    if n2 is not None:
-        N = np.repeat(N[:,:,:,np.newaxis],n2,axis = 3)
-    return N
 
+
+spec = [
+    ('value', int32),               # a simple scalar field
+    ('array', float32[:]),          # an array field
+]
+
+@jitclass(spec)
 class Reservoir():
-    def __init__(self,M=None,N=1000,p=0.1,g=1.6):
+    def __init__(self,M=None,N=1000,p=0.1,g=1.5):
         if M is not None:
             assert M.shape[0] == M.shape[1]
             self.M = M
             self.N = M.shape[0]
         else:
             self.N = N
-            self.M = sprandn(self.N,self.N,p) *g *1.0/np.sqrt(p*N)
+            self.M = self.sprandn(self.N,self.N,p) *g *1.0/np.sqrt(p*N)
         #connections
         self.Jz = None
         self.Jgi = None
@@ -38,13 +29,29 @@ class Reservoir():
         self.x = np.random.rand(self.N,1)
         self.r = np.random.rand(self.N,1)
 
+    @staticmethod
+    def sprandn(N1,N2,p):
+        # import sparse 
+        import scipy.sparse as sparse
+        # import stats
+        import scipy.stats as stats
+        rvs = stats.norm(loc=0, scale=1).rvs
+        S = sparse.random(N1, N2, density=p, data_rvs=rvs)
+        return S.toarray()
 
+    @staticmethod
+    def repmat(M,n1,n2=None):
+        #copy M (m1,m2) to form multi-dim array of (m1,m2,n1,n2)
+        N = np.repeat(M[:,:,np.newaxis], n1, axis=2)
+        if n2 is not None:
+            N = np.repeat(N[:,:,:,np.newaxis],n2,axis = 3)
+        return N
 
     def get_Jz(self,Nout,pz,fb=1,overlap = None):
         self.Nout = Nout
 
         num = int(self.N*pz*Nout) - np.mod(int(self.N*pz*Nout),Nout)
-        sample_nuerons = np.random.choice(np.arange(self.N),int(num),replace=False)
+        sample_nuerons = np.random.choice(np.arange(self.N),num,replace=False)
         neuro_per_read = int(self.N*pz*Nout)//Nout
         gz = np.zeros((self.N,Nout))
         for j in range(Nout):
@@ -54,13 +61,13 @@ class Reservoir():
         self.read_connectivity = gz
         # self.Jz = np.multiply(randn,gz) #(N,Nout)
         self.Jz = np.zeros((self.N,self.Nout))
-        self.Jgz = np.multiply(fb*(np.random.rand(self.N,Nout) - 0.6),gz)
+        self.Jgz = np.multiply(fb*(np.random.rand(self.N,Nout) - 0.5),gz)
         self.read_neurons = sample_nuerons.reshape(Nout,neuro_per_read)
         self.neuro_per_read = neuro_per_read
 
     def add_input(self,Nin,pi,g):
         self.Nin = Nin
-        self.Jgi = g*sprandn(self.N,self.Nin,pi)
+        self.Jgi = g*self.prandn(self.N,self.Nin,pi)
 
     def internal_train(self,input_series,output_series,dt,aplha,nt,test_input=None):
         '''
@@ -79,8 +86,8 @@ class Reservoir():
         test_out = np.zeros((Dout,L))
         x = self.x
         r = self.r
-        Pz = repmat((1.0/aplha)*np.eye(self.N),self.Nout)
-        P = repmat((1.0/aplha)*np.eye(self.N),self.Nout,n2 = self.neuro_per_read)
+        Pz = self.repmat((1.0/aplha)*np.eye(self.N),self.Nout)
+        P = self.repmat((1.0/aplha)*np.eye(self.N),self.Nout,n2 = self.neuro_per_read)
         #_________________training__________________
         for i in range(L):
             print(i)
@@ -136,7 +143,7 @@ class Reservoir():
         
         return train_out,test_out
 
-    def fb_train(self,input_series,output_series,dt,aplha,nt,nl =0,test_input=None):
+    def fb_train(self,input_series,output_series,dt,aplha,nt,test_input=None,fb=1.0):
         if input_series is None:
             input_series = np.zeros(output_series.shape)
             self.add_input(output_series.shape[0],0,0)
@@ -150,19 +157,19 @@ class Reservoir():
         x = self.x
         r = self.r
         z = np.random.randn(Nout,1)
-        P_all = repmat(np.eye(self.N),Nout)
+        P_all = self.repmat(np.eye(self.N),Nout)
         flts = []
         for i in range(Nout):
             synapse_ind = np.where(self.read_connectivity[:,i] !=0)
             flt = np.zeros((self.N,self.N))
-            flt[synapse_ind[0],synapse_ind[0]] = 1
+            flt[synapse_ind,synapse_ind] = 1
             flts.append(flt)
             P_all[:,:,i] = np.dot(P_all[:,:,i],flt)
-        for i in tqdm(range(L)):
+        for i in range(L):
             # print(i)
             t = dt * i
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
-            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz ,z *dt) + np.random.randn(x.shape[0],1)*nl *dt
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz ,z *dt)
             r = np.tanh(x) #(N,1)
             z = np.dot(self.Jz.T,r) # (Nout,1)
 
@@ -186,7 +193,7 @@ class Reservoir():
 
         for i in range(L):
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
-            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz, z *dt) + np.random.randn(x.shape[0],1)*nl *dt
+            x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz, z *dt)
             r = np.tanh(x) #(N,1)
             z = np.dot(self.Jz.T,r) # (Nout,1)
 
@@ -205,104 +212,52 @@ class Reservoir():
             states_T[:,i] = x[:,0]       
         return states_T
 
-def triangle_wave(simtime):
-    #simtime is in shape (1,T)
-    out = np.zeros(simtime.shape)
-    a = simtime.shape[1]//8
-    b = simtime.shape[1]//20
-    for i in range(8):
-        out[0,a*i:a*i+b] = np.array(np.arange(b))/float(b)
-    return out
-
-def norm_percentile(signals,p1=5,p2=95,pcnt=True):
-    # n signals array are of dim (n,T)
-    out = np.zeros(signals.shape)
-    for i in range(signals.shape[0]):
-        s = signals[i,:]
-        if pcnt == True:
-            [n,m] = np.percentile(s,[p1,p2])
-            out[i,:] = (s - n)/(m-n)
-        else:
-            out[i,:] = (s-np.mean(s))/np.std(s)
-    return out
-def norm_weight(signals,weights):
-    out = np.zeros(signals.shape)
-    for i in range(signals.shape[0]):
-        s = signals[i,:]
-        out[i,:] = (s - np.mean(s))/weights[i]
-    return out
 if __name__ == "__main__":
     start = time.time()
-    ct = datetime.datetime.now().strftime("%H_%M_%S")
     time_sec = 1440
     dt = 0.1
     nt = 2
-    N = 1000
-    for i in range(50):
-        alpha = float(np.random.rand(1))
-        fb =1+float(np.random.rand(1))
-        g = 1.6
-        Pz = 0.25
-        Pgg = float(np.random.rand(1))*0.75
-        nn = Reservoir(N=N,p=Pgg,g=g)
-        nn.get_Jz(4,Pz,fb=fb) #(Nout,pz,fb=1)
-        simtime = np.arange(0,time_sec,step=dt).reshape(1,-1)
-        simtime2 = np.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
-        amp = 1.3
-        freq = 1/60
-        ft = np.zeros((4,simtime.shape[1]))
-        ft2 = np.zeros((4,simtime2.shape[1]))
-        ft[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime) + \
-            (amp/2.0)*np.sin(2.0*np.pi*freq*simtime) +  \
-            (amp/6.0)*np.sin(3.0*np.pi*freq*simtime) +  \
-            (amp/3.0)*np.sin(4.0*np.pi*freq*simtime)).reshape(-1,)
+    alpha = 1.0
+    simtime = np.arange(0,time_sec,step=dt).reshape(1,-1)
+    simtime2 = np.arange(time_sec,2*time_sec,step=dt).reshape(1,-1)
+    amp = 1.3
+    freq = 1/60
+    ft = np.zeros((2,simtime.shape[1]))
+    ft2 = np.zeros((2,simtime2.shape[1]))
+    ft[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime) + \
+        (amp/2.0)*np.sin(2.0*np.pi*freq*simtime) +  \
+        (amp/6.0)*np.sin(3.0*np.pi*freq*simtime) +  \
+        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime)).reshape(-1,)
 
-        ft[1,:] = (np.sin(2.0*np.pi*freq*simtime)).reshape(-1,)
-        ft[2,:] = (np.sin(2.0*np.pi*freq*simtime+np.pi/2)).reshape(-1,)
-        ft[3,:] = triangle_wave(simtime).reshape(-1,)
-        ft2[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime2) + \
-            (amp/2.0)*np.sin(2.0*np.pi*freq*simtime2) +  \
-            (amp/6.0)*np.sin(3.0*np.pi*freq*simtime2) +  \
-            (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)).reshape(-1,)
-        ft2[1,:] = (np.sin(2.0*np.pi*freq*simtime2)).reshape(-1,)
-        ft2[2,:] = (np.sin(2.0*np.pi*freq*simtime2+np.pi/2)).reshape(-1,)
-        ft2[3,:] = triangle_wave(simtime2).reshape(-1,)
-        #______________train_______________
-        [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt) #(input_series,output_series,dt,aplha,nt,test_input=None)
-        #__transfer results format
-        train_out = np.asnumpy(train_out)
-        test_out = np.asnumpy(test_out)
-        weight_train = np.asnumpy(weight_train)
-        ft = np.asnumpy(ft)
-        ft2 = np.asnumpy(ft2)
-        simtime = np.asnumpy(simtime)
-        simtime2 = np.asnumpy(simtime2)
-        end = time.time()
-        print('***time consume:****',end-start)
-        plt.figure()
-        plt.subplot(6,1,1)
-        plt.plot(simtime.T,ft.T,'b',simtime.T,train_out.T,'r')
-        plt.title('training')
-        plt.subplot(6,1,2)
-        plt.plot(simtime.T,ft2[0,:].T,'b',simtime.T,test_out[0,:].T,'g')
-        plt.title('testing1')
-        plt.subplot(6,1,3)
-        plt.plot(simtime.T,ft2[1,:].T,'b',simtime.T,test_out[1,:].T,'g')
-        plt.title('testing2')
-        plt.subplot(6,1,4)
-        plt.plot(simtime.T,ft2[2,:].T,'b',simtime.T,test_out[2,:].T,'g')
-        plt.title('testing3')
-        plt.subplot(6,1,5)
-        plt.plot(simtime.T,ft2[3,:].T,'b',simtime.T,test_out[3,:].T,'g')
-        plt.title('testing4')
-        plt.subplot(6,1,6)
-        plt.plot(simtime.T,weight_train.T)
-        plt.title('weight')
-        plt.figtext(0.6, 0.01, "g={} , fb={} , Pz={} , Pgg={} \n aplha={}, N={}".format(g,fb,Pz,Pgg,alpha,N), ha="center", fontsize=12, bbox={"facecolor":"orange", "alpha":0.6, "pad":6})
-        ct = datetime.datetime.now().strftime("%H_%M_%S")
-        filename = './image/multiple_output_' + ct +'.jpeg'
-        plt.savefig(filename,dpi=300)
-    # plt.show()
+    ft[1,:] = (np.sin(2.0*np.pi*freq*simtime)).reshape(-1,)
+
+    ft2[0,:] = ((amp/1.0)*np.sin(1.0*np.pi*freq*simtime2) + \
+        (amp/2.0)*np.sin(2.0*np.pi*freq*simtime2) +  \
+        (amp/6.0)*np.sin(3.0*np.pi*freq*simtime2) +  \
+        (amp/3.0)*np.sin(4.0*np.pi*freq*simtime2)).reshape(-1,)
+    ft2[1,:] = (np.sin(2.0*np.pi*freq*simtime2)).reshape(-1,)
+    nn = Reservoir(N=1000,p=0.5,g=1.5)
+    nn.get_Jz(2,0.2,fb=1.0) #(Nout,pz,g,fb=1)
+    [train_out,test_out,weight_train] = nn.fb_train(None,ft,dt,alpha,nt,fb=1.0) #(input_series,output_series,dt,aplha,nt,test_input=None)
+    end = time.time()
+    print('***time consume:****',start-end)
+    plt.figure()
+    plt.subplot(3,1,1)
+    plt.plot(simtime.T,ft.T,'b',simtime.T,train_out.T,'r')
+    plt.title('training')
+    plt.subplot(3,1,2)
+    plt.plot(simtime.T,ft2.T,'b',simtime.T,test_out.T,'g')
+    plt.title('testing')
+    plt.subplot(3,1,3)
+    plt.plot(simtime.T,weight_train.T)
+    plt.title('weight')
+    # plt.figure()
+    # plt.subplot(2,1,1)
+    # plt.plot(simtime.T,ft2.T,'b')
+    # plt.subplot(2,1,2)
+    # plt.plot(simtime.T,test_out.T,'g')
+    plt.show()
+    
 
                         
 
