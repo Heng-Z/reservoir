@@ -35,32 +35,6 @@ def update_weight(P_all,flts,r,z,Jz,target,delta=0):
         Jz[:,readi] += dw.reshape(-1,)
     return P_all,Jz
     
-def update_readout_synp(P_all,flts,r,z,Jz,M,target):
-    for readi in range(self.Nout):
-        P = P_all[readi]
-        r_p = cp.dot(flts[readi],r)
-        k = cp.dot(P,r_p) #(N,1)
-        rPr = cp.dot(r_p.T,k) # scalar
-        c = 1.0/(1.0 + rPr) # scalar
-        P_all[readi] = P - cp.dot(k,(k.T*c))
-        e = z[readi] - target[readi]
-        dw = -e*k*c
-        Jz[:,readi] += dw.reshape(-1,)
-        
-        neurons_read_i = self.read_neurons[readi,:]
-        for idx,neuroni in enumerate(neurons_read_i):
-            w_ni = self.M[neuroni,:].reshape(1,-1) # (1,N)
-            synapse_ind = cp.where(w_ni!=0)[1]  # find neurons pre-synaptic to neuron i 
-            flt = cp.zeros((self.N,self.N))
-            flt[synapse_ind,synapse_ind] = 1
-            Pi = P[:,:,readi,idx] #(N,N) the actual dim of Pi is num of pre-synapse
-            ki = cp.dot(Pi,cp.dot(flt,r)) 
-            rPr = cp.dot(r.T,ki)
-            c = 1.0/(1.0 + rPr)
-            Pz[:,:,readi] = cp.dot(Pi,flt) -cp.dot(ki,(ki.T * c))
-
-            dw = -e_z * ki * c
-            self.M[neuroni,:] += dw.reshape(-1,)
 def update_one(P,flt,r,e,J,delta=0):
     #add discount factor delta to perform weighted RLS
     r_p = cp.multiply(flt.reshape(-1,1),r)
@@ -89,11 +63,11 @@ class Reservoir():
         self.x = cp.random.rand(self.N,1)
         self.r = cp.random.rand(self.N,1)
         self.time_coef = cp.random.randn(N,1)/5 +1
-        self.discount = 0
+        self.discount = 0.0
 
     def change_time_coef(self):
-        self.time_coef[0:self.N//3] = cp.random.randn(self.N//3,1)*2 + 10
-        self.time_coef[self.N//3:self.N//3*2] =  10*cp.random.randn(self.N//3,1) + 100
+        self.time_coef[0:self.N//5] = cp.random.randn(self.N//5,1)*2 + 10
+        self.time_coef[self.N//5:self.N//5*2] =  5*cp.random.randn(self.N//5,1) + 50
 
     def get_Jz(self,Nout,pz,fb=1,overlap = False):
         self.Nout = Nout
@@ -238,7 +212,7 @@ class Reservoir():
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
             # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
 
-            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise[:,i].reshape(-1,1) + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)))*dt/self.time_coef
+            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise2[:,i].reshape(-1,1) + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)))*dt/self.time_coef
 
             r = cp.tanh(x) #(N,1)
             z = cp.dot(self.Jz.T,r) # (Nout,1)
