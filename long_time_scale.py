@@ -46,11 +46,13 @@ ft[1] = ft1[0]
 ft = cp.hstack([ft,ft,ft,ft,ft])
 inputs0 = (1/flt -1 )/9
 inputs1 = (1-inputs0)*2
-inputs = cp.vstack([inputs0,inputs1])
-# inputs = cp.ones((1,2000))*2
+# inputs = cp.vstack([inputs0,inputs1])
+inputs = cp.ones((1,2000))*0.1
 inputs = cp.hstack([inputs,inputs,inputs,inputs,inputs])
 test_inputs = cp.flip(inputs,axis=1)
 
+np.savez('./embed_data/longtime_train.npz',cp.asnumpy(ft),cp.asnumpy(inputs))
+# np.savez('longtime_test.npz',ft,inpu)
 # %%
 while True:
     nt = 3
