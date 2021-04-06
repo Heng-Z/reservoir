@@ -54,7 +54,8 @@ class Reservoir():
             self.N = M.shape[0]
         else:
             self.N = N
-            self.M = sprandn(self.N,self.N,p) *g *1.0/cp.sqrt(p*N)
+            self.M = sprandn(self.N,self.N,p)
+            self.M = self.M/float(cp.max(cp.abs(cp.linalg.eigh(self.M)[0]))) * g
         #connections
         self.inter_connectivity = (abs(self.M)>1e-6).astype(np.uint8)
         self.Jz = None
@@ -224,13 +225,26 @@ class Reservoir():
     def free_run(self,dt,simulation_time):
         x = self.x
         r = self.r
+        z = cp.dot(self.Jz.T,r)
         tspan = cp.array(cp.arange(0,simulation_time,dt))
         states_T = cp.zeros((self.N,len(tspan)))
         for i,t in enumerate(tspan):
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) 
+            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz,z*dt)
             r = cp.tanh(x) #(N,1)
+            z = cp.dot(self.Jz.T,r)
             states_T[:,i] = x[:,0]       
         return states_T
+
+    def free_esn(self,wash,simulation_time):
+        x = self.x
+        r = self.r
+        states_T = cp.zeros((self.N,simulation_time))
+        for i in range(simulation_time):
+            x = (1.0 - wash) *x +wash*cp.tanh(cp.dot(self.M,x))
+            states_T[:,i] = x[:,0] 
+
+        return states_T  
+        
 
 def triangle_wave(simtime):
     #simtime is in shape (1,T)
