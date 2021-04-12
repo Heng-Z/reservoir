@@ -2,6 +2,7 @@ import numpy as np
 from numpy import matlib
 import matplotlib.pyplot as plt
 import time
+from tqdm import tqdm
 def sprandn(N1,N2,p):
     # import sparse 
     import scipy.sparse as sparse
@@ -78,7 +79,7 @@ class Reservoir():
         Pz = repmat((1.0/aplha)*np.eye(self.N),self.Nout)
         P = repmat((1.0/aplha)*np.eye(self.N),self.Nout,n2 = self.neuro_per_read)
         #_________________training__________________
-        for i in range(L):
+        for i in tqdm(range(L)):
             print(i)
             t = dt * i
             x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
@@ -141,7 +142,6 @@ class Reservoir():
         Nout = output_series.shape[0]
         #array to record output trajectories during training and testing
         train_out = np.zeros((Nout,L))
-        test_out = np.zeros((Nout,L))
         weight_train =np.zeros((Nout,L))
         x = self.x
         r = self.r
@@ -179,7 +179,7 @@ class Reservoir():
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
-
+        test_out = np.zeros((Nout,L))
         for i in range(L):
             # x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
             x = (1.0 - dt) *x +np.dot(self.M,r*dt) + np.dot(self.Jgz, z *dt)

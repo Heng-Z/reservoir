@@ -3,13 +3,22 @@ from reservoir.Force_multi_out_gpu import Reservoir
 import matplotlib.pyplot as plt
 import numpy as np
 import cupy as cp
-wash = 0.5
+import scipy.io
+ft = scipy.io.loadmat('/home/heng/software/easyesn/mytest/lorenz_data.mat')['xdat']
+ft = (ft - np.mean(ft,axis = 0))/np.std(ft,axis=0)
+output_series = cp.asarray(ft[:,0:1].T)
+# output_series = cp.zeros((1,6500))
+
+wash = 0.2
 time_sec = 40000
-nn = Reservoir(N=1000,p=0.1,g=1.4)
-nn.get_Jz(4,0.2,fb=2.0)
-run_results = nn.free_esn(wash,time_sec)
+nn = Reservoir(N=1000,p=0.1,g=1.7)
+nn.get_Jz(1,0.2,fb=2.0)
+run_results = nn.esn_train(None,output_series,wash=0.2)
 print('spectrual radius:',cp.max(cp.abs(cp.linalg.eigh(nn.M)[0])))
 
+
+# %% 
+#plot
 to_plot = cp.asnumpy(run_results[0:5,:]) #
 to_plot_f = np.abs(np.fft.fftshift(np.fft.fft(to_plot,axis=1)))
 plt.figure()

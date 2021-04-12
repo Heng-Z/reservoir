@@ -24,24 +24,27 @@ def repmat(M,n1,n2=None):
 def update_weight(P_all,flts,r,z,Jz,target,delta=0):
     for readi in range(P_all.shape[0]):
         P = P_all[readi]
-        r_p = cp.dot(flts[readi],r)
-        k = cp.dot(P,r_p) #(N,1)
-        rPr = cp.dot(r_p.T,k) # scalar
-        c = 1.0/(1.0 + (1+delta)/(1-delta)*rPr) # scalar
-        P_all[readi] = P/(1-delta) - (1+delta)/(1-delta)**2* cp.dot(k,(k.T*c))
-        # P_all[readi] = P - cp.dot(k,(k.T*c))
+        r_p = cp.matmul(flts[readi],r)
+        k = cp.matmul(P,r_p) #(N,1)
+        rPr = cp.matmul(r_p.T,k) # scalar
+        c = 1.0/(1.0 + rPr)
+        P_all[readi] = P_all[readi] - cp.matmul(k,k.T*c)
         e = z[readi] - target[readi]
-        dw = -e*k*c *(1+delta)/(1-delta)
+        dw =  -e*k*c
+        # c = 1.0/(1.0 + (1.0+delta)/(1.0-delta)*rPr) # scalar
+        # P_all[readi] = P/(1.0-delta) - (1.0+delta)/(1.0-delta)**2* cp.matmul(k,(k.T*c))
+        # e = z[readi] - target[readi]
+        # dw = -e*k*c *(1+delta)/(1-delta)
         Jz[:,readi] += dw.reshape(-1,)
     return P_all,Jz
     
 def update_one(P,flt,r,e,J,delta=0):
     #add discount factor delta to perform weighted RLS
     r_p = cp.multiply(flt.reshape(-1,1),r)
-    k = cp.dot(P,r_p) #(N,1)
-    rPr = cp.dot(r_p.T,k) # scalar
+    k = cp.matmul(P,r_p) #(N,1)
+    rPr = cp.matmul(r_p.T,k) # scalar
     c = 1.0/(1.0 + (1+delta)/(1-delta)*rPr) # scalar
-    P = P/(1-delta) - (1+delta)/(1-delta)**2 * cp.dot(k,(k.T*c))
+    P = P/(1-delta) - (1+delta)/(1-delta)**2 * cp.matmul(k,(k.T*c))
     dw = -e*k*c*(1+delta)/(1-delta)
     J += dw.reshape(-1,)
     return P,J
@@ -128,11 +131,11 @@ class Reservoir():
         for i in tqdm(range(L)):
             # print(i)
             t = dt * i
-            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
+            # x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgi,input_series[:,i]*dt).reshape(-1,1)
+            x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.matmul(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
         
             r = cp.tanh(x) #(N,1)
-            z = cp.dot(self.Jz.T,r) # (Nout,1)
+            z = cp.matmul(self.Jz.T,r) # (Nout,1)
 
             if cp.mod(i,nt) ==0:
                 for readi in range(self.Nout):
@@ -145,16 +148,16 @@ class Reservoir():
                         self.M[neuroni] = new_raw.T
             
             train_out[:,i] = z.reshape(-1,)
-            weight_train[:,i] = cp.diag(cp.sqrt(cp.dot(self.Jz.T,self.Jz)))
+            weight_train[:,i] = cp.diag(cp.sqrt(cp.matmul(self.Jz.T,self.Jz)))
         #_________________testing_______________
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
 
         for i in range(L):
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
+            x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgz ,z *dt) + noise[:,i].reshape(-1,1) *dt + cp.matmul(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
             r = cp.tanh(x) #(N,1)
-            z = cp.dot(self.Jz.T,r) # (Nout,1)
+            z = cp.matmul(self.Jz.T,r) # (Nout,1)
             # print(r.shape,x.shape,z.shape)
             test_out[:,i] = z.reshape(-1,)
         
@@ -171,7 +174,6 @@ class Reservoir():
         Nout = output_series.shape[0]
         #array to record output trajectories during training and testing
         train_out = cp.zeros((Nout,L))
-        test_out = cp.zeros((Nout,L))
         weight_train =cp.zeros((Nout,L))
         x = self.x
         r = self.r
@@ -180,58 +182,60 @@ class Reservoir():
         flts = []
         noise = cp.random.randn(self.N,L)*nl
         noise2 = cp.random.randn(self.N,L)*nl
-        for i in range(Nout):
-            synapse_ind = cp.where(self.read_connectivity[:,i] !=0)
-            flt = cp.zeros((self.N,self.N))
-            flt[synapse_ind[0],synapse_ind[0]] = 1
-            flts.append(flt)
-            P_all[i] = cp.dot(P_all[i],flt)
+        for i in range(self.Nout):
+            flt = self.read_connectivity[:,i:i+1]
+            P_all[i] = cp.multiply(P_all[i],cp.matmul(flt,flt.T))
         for i in tqdm(range(L)):
             # print(i)
             t = dt * i
-            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
+            # x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz * z *dt
 
             #coef * (x'-x)/dt = -x + Mx --> x' = x+dt/coef *(-x+MX)
-            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz ,z*dt) + noise[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
+            # x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgz ,z*dt) + noise[:,i].reshape(-1,1) *dt + cp.matmul(self.Jgi,input_series[:,i].reshape(-1,1)*dt)
             
             #when consider different time scale neurons:
-            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise[:,i].reshape(-1,1) + cp.dot(self.Jgi,input_series[:,i].reshape(-1,1)))*dt/self.time_coef
-
+            x =x+ (-x +cp.matmul(self.M,r) + cp.matmul(self.Jgz ,z) + noise[:,i].reshape(-1,1) + cp.matmul(self.Jgi,input_series[:,i:i+1]))*dt/self.time_coef
+            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z*dt)
             r = cp.tanh(x) #(N,1)
-            z = cp.dot(self.Jz.T,r) # (Nout,1)
+            z = cp.matmul(self.Jz.T,r) # (Nout,1)
             if cp.mod(i,nt) == 0:
-            #____________UPDATE PARAMETERS_________
-                [P_all, self.Jz] = update_weight(P_all,flts,r,z,self.Jz,output_series[:,i],delta=self.discount)
+                for readi in range(self.Nout):
+                    e_z = z[readi] - output_series[readi,i]
+                    [P_all[readi],self.Jz[:,readi]] = update_one(P_all[readi],self.read_connectivity[:,readi],r,e_z,self.Jz[:,readi])
+
+            #____________UPDATE PARAMETERS(original)_________
+                # [P_all, self.Jz] = update_weight(P_all,flts,r,z,self.Jz,output_series[:,i],delta=self.discount)
             train_out[:,i] = z.reshape(-1,)
-            weight_train[:,i] = cp.diag(cp.sqrt(cp.dot(self.Jz.T,self.Jz)))
+            weight_train[:,i] = cp.diag(cp.sqrt(cp.matmul(self.Jz.T,self.Jz)))
         if test_input is None:
             test_input = input_series
         L = test_input.shape[1]
+        test_out = cp.zeros((Nout,L))
         # print(P)
         # print(flts[1])
         for i in range(L):
-            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
-            # x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
+            # x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgi,input_series[:,i]*dt).reshape(-1,1) + self.Jgz *z *dt
+            # x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgz, z *dt) + noise2[:,i].reshape(-1,1) *dt + cp.matmul(self.Jgi,test_input[:,i].reshape(-1,1)*dt)
 
-            x =x+ (-x +cp.dot(self.M,r) + cp.dot(self.Jgz ,z) + noise2[:,i].reshape(-1,1) + cp.dot(self.Jgi,test_input[:,i].reshape(-1,1)))*dt/self.time_coef
+            x =x+ (-x +cp.matmul(self.M,r) + cp.matmul(self.Jgz ,z) + noise2[:,i].reshape(-1,1) + cp.matmul(self.Jgi,test_input[:,i].reshape(-1,1)))*dt/self.time_coef
 
             r = cp.tanh(x) #(N,1)
-            z = cp.dot(self.Jz.T,r) # (Nout,1)
+            z = cp.matmul(self.Jz.T,r) # (Nout,1)
 
             test_out[:,i] = z.reshape(-1,)
-        
+        self.P_all = P_all
         return train_out,test_out,weight_train
 
     def free_run(self,dt,simulation_time):
         x = self.x
         r = self.r
-        z = cp.dot(self.Jz.T,r)
+        z = cp.matmul(self.Jz.T,r)
         tspan = cp.array(cp.arange(0,simulation_time,dt))
         states_T = cp.zeros((self.N,len(tspan)))
         for i,t in enumerate(tspan):
-            x = (1.0 - dt) *x +cp.dot(self.M,r*dt) + cp.dot(self.Jgz,z*dt)
+            x = (1.0 - dt) *x +cp.matmul(self.M,r*dt) + cp.matmul(self.Jgz,z*dt)
             r = cp.tanh(x) #(N,1)
-            z = cp.dot(self.Jz.T,r)
+            z = cp.matmul(self.Jz.T,r)
             states_T[:,i] = x[:,0]       
         return states_T
 
@@ -240,10 +244,27 @@ class Reservoir():
         r = self.r
         states_T = cp.zeros((self.N,simulation_time))
         for i in range(simulation_time):
-            x = (1.0 - wash) *x +wash*cp.tanh(cp.dot(self.M,x))
+            x = (1.0 - wash) *x +wash*cp.tanh(cp.matmul(self.M,x))
             states_T[:,i] = x[:,0] 
-
+        self.x = x
         return states_T  
+        
+    def esn_train(self,input_series,output_series,wash=0.2,alpha=0,nl =0,test_input=None):
+        #inputs/outputs series should be in dim (state,T)
+        x = self.x
+        # r = self.r
+        if input_series is None:
+            input_series = cp.zeros((2,output_series.shape[1]))
+            self.add_input(2,0,0)
+        
+        simulation_time = output_series.shape[1]
+        states_T = cp.zeros((self.N,simulation_time))
+        for i in range(simulation_time):
+            x = (1.0 - wash) *x +wash*cp.tanh(cp.matmul(self.M,x)+cp.matmul(self.Jgz,output_series[:,i].reshape(-1,1))+cp.matmul(self.Jgi,input_series[:,i].reshape(-1,1)))
+            states_T[:,i] = x[:,0] 
+        self.x = x
+        return states_T
+
         
 
 def triangle_wave(simtime):
